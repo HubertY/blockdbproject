@@ -1,0 +1,15 @@
+{
+  "name": "databaseproject",
+  "version": "0.0.1",
+  "description": "project 3 and 4 for Operating Systems 2020",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "author": "Hubert Yuan",
+  "license": "ISC",
+  "dependencies": {
+    "grpc": "^1.24.2",
+    "@grpc/proto-loader": "^0.5.4"
+  }
+}
