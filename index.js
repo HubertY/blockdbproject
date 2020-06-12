@@ -239,7 +239,7 @@ function init(dataDirOverride = false, verbose = false) {
 
     fs.dir = "";
     console.log("reading db.proto...")
-    dbproto = grpc.loadPackageDefinition(protoLoader.loadSync("db.proto")).blockdb;
+    dbproto = grpc.loadPackageDefinition(protoLoader.loadSync("db.proto", {keepCase: true})).blockdb;
     if (!dbproto || !dbproto.BlockDatabase || !dbproto.BlockDatabase.service) {
         throw Error("db.proto is invalid");
     }
@@ -378,10 +378,37 @@ function init(dataDirOverride = false, verbose = false) {
     console.log(`init complete ${totalTransactions} total ${unflushed.length} unflushed`)
 }
 
+const gRPCInterface = {
+    Get(call, callback){
+        let {UserID} = call.request;
+        callback(null, Get(UserID));
+    },
+    Put(call, callback){
+        let {UserID, Value} = call.request;
+        callback(null, Put(UserID, Value));
+    },
+    Withdraw(call, callback){
+        let {UserID, Value} = call.request;
+        callback(null, Withdraw(UserID, Value));
+    },
+    Deposit(call, callback){
+        let {UserID, Value} = call.request;
+        callback(null, Deposit(UserID, Value));
+    },
+    Transfer(call, callback){
+        let {FromID, ToID, Value} = call.request;
+        callback(null, Transfer(FromID, ToID, Value));
+    },
+    LogLength(call, callback){
+        callback(null, LogLength());
+    }
+};
+
+
 function main() {
     init(false, true);
     const server = new grpc.Server();
-    server.addService(dbproto.BlockDatabase.service, { Get, Put, Withdraw, Deposit, Transfer, LogLength });
+    server.addService(dbproto.BlockDatabase.service, gRPCInterface);
     server.bind(`${config.ip}:${config.port}`, grpc.ServerCredentials.createInsecure());
     server.start();
     console.log(`listening on ${config.ip}:${config.port}`);
@@ -397,4 +424,3 @@ exports.LogLength = LogLength;
 exports.init = init;
 exports.main = main;
 exports.forceFlushFail = forceFlushFail;
-
