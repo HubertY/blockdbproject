@@ -6,12 +6,13 @@ const ROOT_HASH = "0000000000000000000000000000000000000000000000000000000000000
 //any hash collisions here will cause horrible and impossible-to-debug errors.
 //there aren't supposed to be any hash collisions though so hopefully it's ok :)
 class BlockTree {
-    //functional
+    //applies an array of transactions to a state and returns the resulting state.
+    //does not mutate the original state.
     applyTransactions(transactions, state = this.states[this.bestLeaf]) {
         //deep copy (unironically very efficient)
         let ret = JSON.parse(JSON.stringify(state));
         for (let t of transactions) {
-            if(t.Type !== "TRANSFER"){
+            if (t.Type !== "TRANSFER") {
                 return false;
             }
             ret[t.ToID] = ret[t.ToID] || 1000;
@@ -22,14 +23,14 @@ class BlockTree {
             }
             ret[t.ToID] += t.Value - t.MiningFee;
             ret[t.FromID] -= t.Value;
-            ret[MinerID] += t.MiningFee;
+            ret[t.MinerID] += t.MiningFee;
             if (ret[t.FromID] < 0) {
                 return false;
             }
         }
         return ret;
     }
-    
+
     getState(hash) {
         if (this.states[hash]) {
             return this.states[hash];
@@ -60,7 +61,7 @@ class BlockTree {
         return hash === ROOT_HASH || this.blocks[hash];
     }
     //attempts to add a block to the tree. doesn't do anything if it can't connect.
-    add(block, hash = false) {
+    add(block, hash = null) {
         if (!(block.PrevHash === ROOT_HASH || this.blocks[block.PrevHash])) {
             console.log(`/ ${hash} rejected (no parent block found)`);
             return false;

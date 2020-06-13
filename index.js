@@ -1,8 +1,8 @@
 const _fs = require("fs");
 const grpc = require("grpc");
 const protoLoader = require("@grpc/proto-loader");
-const {get_hash_string} = require("./hash.js");
-const {BlockTree} = require("./blocktree.js");
+const { get_hash_string } = require("./hash.js");
+const { BlockTree } = require("./blocktree.js");
 
 let N = 50;
 
@@ -136,7 +136,7 @@ class Peer {
 //all these functions have no concurrency issues due to javascript event model
 
 //send a command to all the peers and return the first valid result.
-async function getFirstValidResultFromPeers(command, args, timeout = 500, valid = () => true) {
+async function getFirstValidResultFromPeers(command, args, timeout = 500, valid = (result) => true) {
     let done = false;
     return new Promise(async (resolve) => {
         for (let peer of peers) {
@@ -161,7 +161,7 @@ async function getFirstValidResultFromPeers(command, args, timeout = 500, valid 
 async function getCollatedResultsFromPeers(command, args, timeout = 500) {
     let done = false;
     return new Promise(async (resolve) => {
-        results = [];
+        let results = [];
         for (let peer of peers) {
             peer.call(command, args).then((result) => {
                 if (!done) {
@@ -181,10 +181,10 @@ async function getCollatedResultsFromPeers(command, args, timeout = 500) {
 }
 
 //Arrange the fields of a transaction in standard order and make sure it's in the correct format.
-function standardizeTransaction(t){
-    if(typeof t !== "object" || typeof t.Type !== "string" || 
-    typeof t.FromID !== "string" || typeof t.ToID !== "string" || 
-    typeof t.Value !== "number" || typeof t.MiningFee !== "number"|| typeof t.UUID !== "string"){
+function standardizeTransaction(t) {
+    if (typeof t !== "object" || typeof t.Type !== "string" ||
+        typeof t.FromID !== "string" || typeof t.ToID !== "string" ||
+        typeof t.Value !== "number" || typeof t.MiningFee !== "number" || typeof t.UUID !== "string") {
         return false;
     }
     return {
@@ -199,15 +199,15 @@ function standardizeTransaction(t){
 
 //sanitize a json string representing a block and return the block with the fields arranged in standard order.
 //also optionally checks if the hash is ok
-function parseBlockString(str, hash = false){
+function parseBlockString(str, hash = null) {
     const data = JSON.parse(str);
-    if(!data || typeof data.BlockID !== number || typeof data.PrevHash !== "string" ||
-    !Array.isArray(data.Transactions) || typeof data.MinerId !== "string" || typeof data.Nonce !== "string"){
+    if (!data || typeof data.BlockID !== "number" || typeof data.PrevHash !== "string" ||
+        !Array.isArray(data.Transactions) || typeof data.MinerId !== "string" || typeof data.Nonce !== "string") {
         return false;
     }
-    for(let i = 0; i < data.Transactions.length; i++){
+    for (let i = 0; i < data.Transactions.length; i++) {
         data.Transactions[i] = standardizeTransaction(data.Transactions[i]);
-        if(!data.Transactions[i]){
+        if (!data.Transactions[i]) {
             return false;
         }
     }
@@ -218,28 +218,28 @@ function parseBlockString(str, hash = false){
         MinerId: data.MinerId,
         Nonce: data.Nonce
     };
-    if(hash){
-        if(get_hash_string(JSON.stringify(ret)) !== hash){
+    if (hash) {
+        if (get_hash_string(JSON.stringify(ret)) !== hash) {
             return false;
         }
     }
     return ret;
 }
 
-async function recoverBlock(hash){
-    let block = false;
-    await getFirstValidResultFromPeers("GetBlock", {BlockHash: hash}, 500, (result)=>{
-        if(!result){
+async function recoverBlock(hash) {
+    let block = null;
+    await getFirstValidResultFromPeers("GetBlock", { BlockHash: hash }, 500, (result) => {
+        if (!result) {
             return false;
         }
         block = parseBlockString(result, hash);
-        return block;
+        return !!block;
     });
     return block;
 }
 
-async function recoverBranch(hash){
-    if(blocktree.has(hash)){
+async function recoverBranch(hash) {
+    if (blocktree.has(hash)) {
         return true;
     }
 
@@ -249,27 +249,27 @@ async function recoverBranch(hash){
     const hashes = [hash];
 
     let done = false;
-    while(true){
-        let hash = hashes[hashes.length-1];
+    while (true) {
+        let hash = hashes[hashes.length - 1];
         let block = await recoverBlock(hash);
-        if(block){
+        if (block) {
             blocks.push(block);
-            if(blocktree.has(block.PrevHash)){
+            if (blocktree.has(block.PrevHash)) {
                 console.log("tree found, unrolling");
                 break;
             }
-            else{
+            else {
                 hashes.push(block.PrevHash);
             }
         }
-        else{
+        else {
             console.log(`...block ${hash} not found, dropping branch`);
             return false;
         }
     }
-    for(let i = hashes.length-1; i--;){
+    for (let i = hashes.length - 1; i--;) {
         const success = blocktree.add(blocks[i], hashes[i]);
-        if(!success){
+        if (!success) {
             console.log(`...block ${hash} invalid, dropping rest of branch`);
             return false;
         }
@@ -281,12 +281,12 @@ async function recoverTree() {
     console.log("beginning full blockchain recovery");
     //ask all the peers for their leaf nodes
     let leaves = await getCollatedResultsFromPeers("GetHeight");
-    if(leaves.length === 0){
+    if (leaves.length === 0) {
         console.log("all the peers are down, trying again in 5 seconds");
         setTimeout(recoverTree, 5000);
         return false;
     }
-    for(let leaf of leaves){
+    for (let leaf of leaves) {
         await recoverBranch(leaf);
     }
     console.log("blockchain recovery complete");
@@ -298,19 +298,19 @@ function Get({ UserID }) {
     return { Value: state[UserID] || 1000 };
 }
 
-function Transfer(args = { Type, FromID, ToID, Value, MiningFee, UUID }) {
-    if(blocktree.transactionUUIDs.has(UUID)){
+function Transfer(args) {
+    if (blocktree.transactionUUIDs.has(args.UUID)) {
         return { Success: false };
     }
-    if(unflushed.has(UUID)){
+    if (unflushed.has(args.UUID)) {
         return { Success: false };
     }
-    const state = blocktree.applyTransactions(unflushed.values());
+    let state = blocktree.applyTransactions(unflushed.values());
     state = blocktree.applyTransactions(state, [args]);
-    if(!state){
+    if (!state) {
         return { Success: false };
     }
-    unflushed.set(UUID, args);
+    unflushed.set(args.UUID, args);
     return { Success: true };
 }
 
@@ -322,9 +322,9 @@ function GetHeight() {
     return { Height: blocktree.bestHeight, LeafHash: blocktree.bestLeaf };
 }
 
-function GetBlock({BlockHash}) {
+function GetBlock({ BlockHash }) {
     const block = blocktree.blocks[BlockHash];
-    return {Json: block ? JSON.stringify(block) : null}
+    return { Json: block ? JSON.stringify(block) : null }
 }
 
 function PushBlock() {
@@ -359,7 +359,7 @@ function init(id = "1", dataDirOverride = false, verbose = false) {
     console.log("...ok")
 
     console.log("reading config.json...");
-    const configFile = JSON.parse(fs.read("config.json", "utf8"))
+    const configFile = JSON.parse(fs.read("config.json"))
 
     for (let key in configFile) {
         if (key !== "nservers") {
@@ -410,7 +410,7 @@ const gRPCInterface = {
 
     Transfer(call, callback) {
         let { FromID, ToID, Value } = call.request;
-        callback(null, Transfer(FromID, ToID, Value));
+        callback(null, Transfer({ FromID, ToID, Value }));
     },
 };
 
