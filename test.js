@@ -152,6 +152,9 @@ async function runTests() {
     
     //test best leaf is updated
     test(GetHeight(), deepComparator({ Height: blocks[8].BlockID, LeafHash: blocks[9].PrevHash }));
+
+    //test miner got rewarded
+    console.log(Get({UserID: "Server01"}).Value, 1045);
 }
 
 runTests();

@@ -171,7 +171,8 @@ class Peer {
             });
         });
     }
-    constructor(ip) {
+    constructor(name, ip) {
+        this.name = name;
         this.ip = ip;
         this.rpc = new dbproto.BlockChainMiner(ip, grpc.credentials.createInsecure());
     }
@@ -270,6 +271,12 @@ function parseBlockString(str, hash = null) {
     for (let i = 0; i < data.Transactions.length; i++) {
         data.Transactions[i] = standardizeTransaction(data.Transactions[i]);
         if (!data.Transactions[i]) {
+            return null;
+        }
+    }
+    if(data.MinerID){
+        if(config.name !== data.MinerID && !peers.find(peer=>peer.name === data.MinerID)){
+            console.log(`MinerID ${data.MinerID} is not a valid server`);
             return null;
         }
     }
@@ -504,18 +511,24 @@ function init(id = "1", peersOverride = null, verbose = false) {
         if (key !== "nservers") {
             if (key === id) {
                 config = configFile[key];
-                config.name = "Server";
-                if (id.length < 2) {
-                    config.name += "0";
+                let name = "Server";
+                if (key.length < 2) {
+                    name += "0";
                 }
-                config.name += id;
+                name += key;
+                config.name = name;
             }
             else {
                 let ip = configFile[key];
                 if (!ip.ip || !ip.port) {
                     throw Error("config.json is invalid");
                 }
-                peers.push(new Peer(`${ip.ip}:${ip.port}`));
+                let name = "Server";
+                if (key.length < 2) {
+                    name += "0";
+                }
+                name += key;
+                peers.push(new Peer(name, `${ip.ip}:${ip.port}`));
             }
         }
     }
