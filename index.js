@@ -1,8 +1,9 @@
 const _fs = require("fs");
 const grpc = require("grpc");
 const protoLoader = require("@grpc/proto-loader");
-const { get_hash_string } = require("./hash.js");
+const { get_hash_string, check_hash } = require("./hash.js");
 const { BlockTree } = require("./blocktree.js");
+const { allowedNodeEnvironmentFlags } = require("process");
 
 let N = 50;
 
@@ -17,6 +18,82 @@ let unflushed = new Map();
 
 let peers = [];
 
+let cached = null;
+let cachedTransactionLength = null;
+let cachedBlockHash = null;
+function evaluateCurrentState() {
+    if (blocktree.bestLeaf === cachedBlockHash && cachedTransactionLength === unflushed.size) {
+        return cached;
+    }
+    else {
+        for (let id of unflushed.keys()) {
+            if (blocktree.findTransaction(id)) {
+                unflushed.delete(id);
+            }
+        }
+        let error = {};
+        let ret = null;
+        while (!(ret = blocktree.applyTransactions(unflushed.values(), blocktree.bestLeaf, error))) {
+            unflushed.delete(error.failed.UUID);
+        }
+        cached = ret;
+        cachedTransactionLength = unflushed.size;
+        cachedBlockHash = blocktree.bestLeaf;
+        return ret;
+    }
+}
+//[0, 91] -> [!, |]
+function chara(n) {
+    let ret = String.fromCharCode(n + 33);
+    if (ret === "\\") {
+        return "}";
+    }
+    else if (ret === "\"") {
+        return "~";
+    }
+    return ret;
+}
+
+let MAX = 92 * 92 * 92 * 92 * 92 * 92 * 92 * 92 - 1;
+let x = Math.floor(Math.random() * MAX);
+function nextNonce() {
+    let ret = "";
+    let n = x;
+    for (let i = 8; i--;) {
+        let q = n % 92;
+        ret += chara(q);
+        n -= q;
+        n /= 92;
+    }
+    x++;
+    if (x > MAX) {
+        x = 0;
+    }
+    return ret;
+}
+
+let attempts = 0;
+async function mine() {
+    attempts++;
+    evaluateCurrentState();
+    if (unflushed.size === 0) {
+        return;
+    }
+    let block = {
+        BlockID: blocktree.bestHeight + 1,
+        PrevHash: blocktree.bestLeaf,
+        Transactions: [...unflushed.values()].slice(0, 50),
+        MinerID: config.name,
+        Nonce: nextNonce()
+    }
+    let s = JSON.stringify(block);
+    if (check_hash(get_hash_string(s))) {
+        attempts = 0;
+        console.log(`successfully mined a new block with nonce ${block.Nonce} after ${attempts} attempts`);
+        await PushBlock({ Json: s });
+        await getFirstValidResultFromPeers("PushBlock", { Json: s });
+    }
+}
 
 //stolen from https://geedew.com/remove-a-directory-that-is-not-empty-in-nodejs/
 function deleteFolderRecursive(path) {
@@ -71,54 +148,10 @@ const fs = {
     }
 }
 
-/*
-function readTransaction(data) {
-    if (data.Type === "PUT") {
-        return Put(data.UserID, data.Value, false).Success;
-    }
-    else if (data.Type === "WITHDRAW") {
-        return Withdraw(data.UserID, data.Value, false).Success;
-    }
-    else if (data.Type === "DEPOSIT") {
-        return Deposit(data.UserID, data.Value, false).Success;
-    }
-    else if (data.Type === "TRANSFER") {
-        return Transfer(data.FromID, data.ToID, data.Value, false).Success;
-    }
+
+async function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
-
-function writeTransaction(data) {
-    if (unflushed.length === N) {
-        flush();
-    }
-    fs.dir = config.dataDir + "unflushed/";
-    fs.write(`${totalTransactions}.json`, JSON.stringify(data));
-    totalTransactions++;
-    unflushed.push(data);
-}
-
-function flush() {
-    if (unflushed.length !== N || totalTransactions % N !== 0) {
-        console.log(unflushed.length, totalTransactions);
-        throw Error("???");
-    }
-
-    const data = {
-        BlockID: totalTransactions / N,
-        PrevHash: "00000000",
-        Transactions: unflushed,
-        Nonce: "00000000"
-    }
-
-    fs.dir = config.dataDir;
-    fs.write(`${data.BlockID}.json`, JSON.stringify(data));
-    fs.dir = config.dataDir + "unflushed/";
-    for (let file of fs.ls()) {
-        fs.delete(file);
-    }
-    unflushed = [];
-}
-*/
 
 class Peer {
     async call(command, args) {
@@ -139,20 +172,27 @@ class Peer {
 async function getFirstValidResultFromPeers(command, args, timeout = 500, valid = (result) => true) {
     let done = false;
     return new Promise(async (resolve) => {
+        let counter = 0;
         for (let peer of peers) {
             peer.call(command, args).then((result) => {
                 if (!done) {
+                    counter++;
                     if (valid(result)) {
                         done = true;
                         resolve(result);
                     }
+                    else {
+                        if (counter === peers.length) {
+                            done = true;
+                            resolve(null);
+                        }
+                    }
                 }
             });
         }
-        setTimeout(() => {
-            done = true;
-            resolve(null);
-        }, timeout);
+        await sleep(timeout);
+        done = true;
+        resolve(null);
     });
 }
 
@@ -173,10 +213,9 @@ async function getCollatedResultsFromPeers(command, args, timeout = 500) {
                 }
             });
         }
-        setTimeout(() => {
-            done = true;
-            resolve(results);
-        }, timeout);
+        await sleep(timeout);
+        done = true;
+        resolve(results);
     });
 }
 
@@ -185,7 +224,10 @@ function standardizeTransaction(t) {
     if (typeof t !== "object" || typeof t.Type !== "string" ||
         typeof t.FromID !== "string" || typeof t.ToID !== "string" ||
         typeof t.Value !== "number" || typeof t.MiningFee !== "number" || typeof t.UUID !== "string") {
-        return false;
+        return null;
+    }
+    if (t.FromID === t.ToID) {
+        return null;
     }
     return {
         Type: t.Type,
@@ -203,12 +245,12 @@ function parseBlockString(str, hash = null) {
     const data = JSON.parse(str);
     if (!data || typeof data.BlockID !== "number" || typeof data.PrevHash !== "string" ||
         !Array.isArray(data.Transactions) || typeof data.MinerId !== "string" || typeof data.Nonce !== "string") {
-        return false;
+        return null;
     }
     for (let i = 0; i < data.Transactions.length; i++) {
         data.Transactions[i] = standardizeTransaction(data.Transactions[i]);
         if (!data.Transactions[i]) {
-            return false;
+            return null;
         }
     }
     const ret = {
@@ -220,7 +262,7 @@ function parseBlockString(str, hash = null) {
     };
     if (hash) {
         if (get_hash_string(JSON.stringify(ret)) !== hash) {
-            return false;
+            return null;
         }
     }
     return ret;
@@ -276,7 +318,6 @@ async function recoverBranch(hash) {
     }
 }
 
-//chain recovery
 async function recoverTree() {
     console.log("beginning full blockchain recovery");
     //ask all the peers for their leaf nodes
@@ -294,28 +335,51 @@ async function recoverTree() {
 
 
 function Get({ UserID }) {
-    const state = blocktree.applyTransactions(unflushed);
-    return { Value: state[UserID] || 1000 };
+    return { Value: evaluateCurrentState()[UserID] || 1000 };
 }
 
-function Transfer(args) {
-    if (blocktree.transactionUUIDs.has(args.UUID)) {
+async function Transfer(args) {
+    if (blocktree.findTransaction(args.UUID)) {
         return { Success: false };
     }
     if (unflushed.has(args.UUID)) {
         return { Success: false };
     }
-    let state = blocktree.applyTransactions(unflushed.values());
-    state = blocktree.applyTransactions(state, [args]);
+    let state = blocktree.applyTransactions(evaluateCurrentState(), [args]);
     if (!state) {
         return { Success: false };
     }
     unflushed.set(args.UUID, args);
-    return { Success: true };
+
+    const result = await getFirstValidResultFromPeers("PushTransaction", args, 500, (result) => result.Success);
+    return { Success: !!result };
 }
 
 function Verify({ Type, FromID, ToID, Value, MiningFee, UUID }) {
-    return { Result: 0, BlockHash: ":)" };
+    if (unflushed.has(UUID)) {
+        let t = unflushed.get(UUID);
+        if (t.Type === Type && t.FromID === FromID && t.ToID === ToID && t.Value === Value && t.MiningFee === MiningFee) {
+            return { Result: 1, BlockHash: null };
+        }
+    }
+
+    let search = blocktree.findTransaction(UUID);
+    if (!search) {
+        return { Result: 0, BlockHash: null };
+    }
+    else {
+        let block = blocktree.blocks[search.hash];
+        let t = block.Transactions[search.index];
+        if (!(t.Type === Type && t.FromID === FromID && t.ToID === ToID && t.Value === Value && t.MiningFee === MiningFee)) {
+            return { Result: 0, BlockHash: null };
+        }
+        if (blocktree.bestHeight - block.BlockID > 6) {
+            return { Result: 2, BlockHash: search.hash };
+        }
+        else {
+            return { Result: 1, BlockHash: search.hash };
+        }
+    }
 }
 
 function GetHeight() {
@@ -327,12 +391,46 @@ function GetBlock({ BlockHash }) {
     return { Json: block ? JSON.stringify(block) : null }
 }
 
-function PushBlock() {
-
+async function PushBlock({ Json }) {
+    const block = parseBlockString(Json);
+    if (!block) {
+        return { Success: false };
+    }
+    const hash = get_hash_string(JSON.stringify(block));
+    if (!check_hash(hash)) {
+        return { Success: false };
+    }
+    if (blocktree.has(block.PrevHash)) {
+        return { Success: blocktree.add(block, hash) };
+    }
+    else {
+        if (await recoverBranch(block.PrevHash)) {
+            return { Success: blocktree.add(block, hash) };
+        }
+        else {
+            return { Success: false };
+        }
+    }
 }
 
-function PushTransaction() {
+function PushTransaction(args) {
+    const t = standardizeTransaction(args);
+    if (!t) {
+        return { Success: false };
+    }
+    if (blocktree.findTransaction(args.UUID)) {
+        return { Success: false };
+    }
+    if (unflushed.has(args.UUID)) {
+        return { Success: false };
+    }
+    let state = blocktree.applyTransactions(evaluateCurrentState(), [args]);
+    if (!state) {
+        return { Success: false };
+    }
+    unflushed.set(args.UUID, args);
 
+    return { Success: true };
 }
 
 function Kill() {
@@ -366,6 +464,11 @@ function init(id = "1", dataDirOverride = false, verbose = false) {
             if (key === id) {
                 config = configFile[key];
                 config.nservers = configFile.nservers;
+                config.name = "Server";
+                if (id.length < 2) {
+                    config.name += "0";
+                }
+                config.name += id;
             }
             else {
                 let ip = configFile[key];
@@ -408,12 +511,43 @@ function init(id = "1", dataDirOverride = false, verbose = false) {
 
 const gRPCInterface = {
 
-    Transfer(call, callback) {
-        let { FromID, ToID, Value } = call.request;
-        callback(null, Transfer({ FromID, ToID, Value }));
+    Get(call, callback) {
+        callback(null, Get(call.request));
     },
+
+    async Transfer(call, callback) {
+        callback(null, await Transfer(call.request));
+    },
+
+    Verify(call, callback) {
+        callback(null, Verify(call.request));
+    },
+
+    GetHeight(call, callback) {
+        callback(null, GetHeight());
+    },
+
+    GetBlock(call, callback) {
+        callback(null, GetBlock(call.request));
+    },
+    async PushBlock(call, callback) {
+        callback(null, await PushBlock(call.request));
+    },
+    PushTransaction(call, callback) {
+        callback(null, PushTransaction(call.request));
+    },
+    Kill(call, callback) {
+        callback(null, Kill());
+        process.exit();
+    }
 };
 
+async function mineLoop() {
+    while (true) {
+        await mine();
+        await sleep(10);
+    }
+}
 
 function main(id = "1") {
     console.log(id);

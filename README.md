@@ -15,10 +15,12 @@ When attempting to acquire a single block from its hash, we query all peers, tak
 
 When attempting to rebuild the whole tree we query all peers and try to walk back to the root from every branch. We drop any blocks that cannot be connected back to the root.
 
-
-One gRPC commands is added for testing purposes:
-
-``Kill`` returns ``{Success: true}`` to the client then immediately kills the server. Due to the nature of javascript's event model, ``Kill`` will never interrupt another request and as such will not corrupt disk writes.
-
-
 We store the global state after each block together with the blocks themselves in order to allow both querying balances and connecting blocks anywhere on the tree in O(1) time. However in the worst case this results in O(n^2) memory usage. 
+
+## Modifications to db.proto
+
+Commands ``PushTransaction(Transaction)`` and `PushBlock(JsonBlockString) ` now return ``BooleanResponse`` instead of ``Null``, indicating that the command is acknowledged and whether or not the pushed data is new and valid information.
+
+New command ``Kill(Null)`` returns ``{Success: true}`` to the client then immediately kills the server. Due to the nature of javascript's event model, ``Kill`` cannot corrupt disk writes.
+
+

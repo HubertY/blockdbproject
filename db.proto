@@ -25,10 +25,10 @@ service BlockChainMiner {
 	rpc GetBlock(GetBlockRequest) returns (JsonBlockString) {}
 
 	// Send a block to another server
-	rpc PushBlock(JsonBlockString) returns (Null) {}
+	rpc PushBlock(JsonBlockString) returns (BooleanResponse) {}
 
 	// Send a transaction to another server
-	rpc PushTransaction(Transaction) returns (Null) {}
+	rpc PushTransaction(Transaction) returns (BooleanResponse) {}
 
 	// Return Success=true, then kills the server
 	rpc Kill(Null) returns (BooleanResponse) {}

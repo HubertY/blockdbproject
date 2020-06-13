@@ -6,25 +6,50 @@ const ROOT_HASH = "0000000000000000000000000000000000000000000000000000000000000
 //any hash collisions here will cause horrible and impossible-to-debug errors.
 //there aren't supposed to be any hash collisions though so hopefully it's ok :)
 class BlockTree {
+
+    //walk down the tree, looking for a block containing a particular transaction. exits early if it hits the memoized minimal height.
+    findTransaction(UUID, hash = this.bestLeaf) {
+        if (!this.has(hash)) {
+            return null;
+        }
+        let min = this.transactionMinimalHeight[UUID];
+        if (min === undefined) {
+            return null;
+        }
+        let height = this.getHeight(hash);
+        while (height >= min) {
+            let block = this.blocks[hash];
+            let index = block.Transactions.findIndex(t => t.UUID === UUID);
+            if (index !== -1) {
+                return { hash, index };
+            }
+            height--;
+        }
+        return null;
+    }
+
     //applies an array of transactions to a state and returns the resulting state.
-    //does not mutate the original state.
-    applyTransactions(transactions, state = this.states[this.bestLeaf]) {
+    //does not mutate the original state. writes which transaction failed to failReport.
+    applyTransactions(transactions, state = this.states[this.bestLeaf], failReport = {}) {
         //deep copy (unironically very efficient)
         let ret = JSON.parse(JSON.stringify(state));
         for (let t of transactions) {
             if (t.Type !== "TRANSFER") {
+                failReport.failed = t;
                 return false;
             }
             ret[t.ToID] = ret[t.ToID] || 1000;
             ret[t.FromID] = ret[t.FromID] || 1000;
             ret[t.MinerID] = ret[t.MinerID] || 1000;
             if (t.Value <= t.MiningFee) {
+                failReport.failed = t;
                 return false;
             }
             ret[t.ToID] += t.Value - t.MiningFee;
             ret[t.FromID] -= t.Value;
             ret[t.MinerID] += t.MiningFee;
             if (ret[t.FromID] < 0) {
+                failReport.failed = t;
                 return false;
             }
         }
@@ -80,7 +105,7 @@ class BlockTree {
         }
 
         for (let t of block.Transactions) {
-            if (this.transactionUUIDs.has(t.UUID)) {
+            if (this.findTransaction(t.UUID, block.PrevHash)) {
                 console.log(`/ ${hash} rejected from tree (duplicate transaction)`);
                 return false;
             }
@@ -92,7 +117,10 @@ class BlockTree {
         }
 
         for (let t of block.Transactions) {
-            this.transactionUUIDs.add(t.UUID);
+            let min = this.transactionMinimalHeight.get(t.UUID);
+            if (!min || height < min) {
+                this.transactionMinimalHeight.set(t.UUID, height);
+            }
         }
 
         if (height > this.bestHeight || (height === this.bestHeight && hash < this.bestLeaf)) {
@@ -100,7 +128,7 @@ class BlockTree {
             this.bestHeight = height;
         }
         console.log(`+ ${hash} added to tree (height ${height})`);
-        return height;
+        return true;
     }
     constructor() {
         //hash -> block
@@ -111,7 +139,8 @@ class BlockTree {
         this.bestLeaf = ROOT_HASH;
         this.bestHeight = 0;
 
-        this.transactionUUIDs = new Set();
+        //UUID -> height
+        this.transactionMinimalHeight = new Map();
     }
 }
 
